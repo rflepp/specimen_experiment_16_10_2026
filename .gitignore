@@ -1,0 +1,9 @@
+# Only the encrypted build (docs/) and the encryption tooling are published.
+# Plaintext site, raw data and the data build script stay local.
+site/
+content/
+results/
+plannings/
+tools/build_site.py
+*.stl
+__pycache__/

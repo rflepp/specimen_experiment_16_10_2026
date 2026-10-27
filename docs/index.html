@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Protected presentation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<style>
+  :root { color-scheme: light; --bg: #fcfcfb; --border: #e4e2db; --text: #0b0b0b; --muted: #8a8880; --err: #c62f2f; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { color-scheme: dark; --bg: #121211; --border: #2c2b29; --text: #f0efec; --muted: #8e8d85; --err: #e66767; }
+  }
+  :root[data-theme="dark"] { color-scheme: dark; --bg: #121211; --border: #2c2b29; --text: #f0efec; --muted: #8e8d85; --err: #e66767; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 Inter, system-ui, sans-serif; }
+  .lock { min-height: 100dvh; display: grid; place-items: center; padding: 16px; box-sizing: border-box; }
+  .lock form { width: min(360px, 100%); }
+  .lock h1 { font-size: 22px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .lock p { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+  .lock .field { display: flex; gap: 8px; }
+  .lock input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: transparent; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; }
+  .lock input:focus { outline: 2px solid var(--text); outline-offset: -1px; }
+  .lock button { font: 600 14px Inter, system-ui, sans-serif; color: var(--bg); background: var(--text); border: 0; border-radius: 8px; padding: 0 16px; cursor: pointer; }
+  .lock button:disabled { opacity: .5; cursor: wait; }
+  .lock .msg { min-height: 1.5em; margin: 10px 0 0; font-size: 13px; }
+  .lock .msg.err { color: var(--err); }
+</style>
+</head>
+<body data-salt="e706cb79edb4db7d69394598976d8702" data-iterations="600000">
+<main class="lock">
+  <form autocomplete="on">
+    <h1>Protected presentation</h1>
+    <p>Enter the password to open it.</p>
+    <input type="text" name="username" value="presentation" autocomplete="username" hidden>
+    <div class="field">
+      <input type="password" name="password" autocomplete="current-password" aria-label="Password" required autofocus>
+      <button type="submit">Open</button>
+    </div>
+    <p class="msg" role="status"></p>
+  </form>
+</main>
+<script type="module">
+const utf8 = new TextEncoder(), text = new TextDecoder();
+const { salt, iterations } = document.body.dataset;
+const nativeFetch = window.fetch.bind(window);
+const base = new URL('.', location.href).pathname;
+const form = document.querySelector('form'), msg = form.querySelector('.msg'), button = form.querySelector('button');
+
+async function deriveKey(password) {
+  const material = await crypto.subtle.importKey('raw', utf8.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: Uint8Array.from(salt.match(/../g), (h) => parseInt(h, 16)), iterations: +iterations }, material, 256);
+  return new Uint8Array(bits);
+}
+
+async function unlock(raw) {
+  const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+  const open = async (name) => {
+    const buf = await (await nativeFetch(`x/${name}`)).arrayBuffer();
+    return crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(buf, 0, 12) }, key, new Uint8Array(buf, 12));
+  };
+  const files = JSON.parse(text.decode(await open('m'))); // throws for a wrong password
+  const get = (path) => open(files[path].f);
+  const read = async (path) => text.decode(await get(path));
+  const blobUrl = async (path) => URL.createObjectURL(new Blob([await get(path)], { type: files[path].type }));
+
+  // the page fetches its data by relative path: serve those requests from the encrypted files
+  window.fetch = async (input, init) => {
+    const path = new URL(input instanceof Request ? input.url : input, location.href).pathname;
+    const rel = path.startsWith(base) ? decodeURIComponent(path.slice(base.length)) : null;
+    if (rel && files[rel]) return new Response(await get(rel), { headers: { 'Content-Type': files[rel].type } });
+    return nativeFetch(input, init);
+  };
+
+  const [html, css, classic, app] = await Promise.all([read('index.html'), read('style.css'), blobUrl('classic.js'), read('app.js')]);
+  const page = new DOMParser().parseFromString(html, 'text/html');
+  page.querySelectorAll('script').forEach((s) => s.remove());
+  const videos = [...page.querySelectorAll('video[src]')].map((v) => {
+    const src = v.getAttribute('src');
+    v.removeAttribute('src');
+    return [v, src];
+  });
+  document.title = page.title;
+  document.head.append(Object.assign(document.createElement('style'), { textContent: css }));
+  document.body.replaceChildren(...page.body.childNodes);
+
+  const appUrl = URL.createObjectURL(new Blob([app.replace("'./classic.js'", `'${classic}'`)], { type: 'text/javascript' }));
+  await import(appUrl);
+  // videos last, so the 3D data is not held up behind them
+  for (const [v, src] of videos) {
+    const [path, frag] = src.split('#');
+    v.src = (await blobUrl(path)) + (frag ? `#${frag}` : '');
+  }
+}
+
+async function attempt(raw, remember) {
+  await unlock(raw);
+  if (remember) try { sessionStorage.setItem('k', Array.from(raw, (b) => b.toString(16).padStart(2, '0')).join('')); } catch {}
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  button.disabled = true;
+  msg.className = 'msg';
+  msg.textContent = 'Opening…';
+  try {
+    await attempt(await deriveKey(form.password.value), true);
+  } catch (err) {
+    if (!document.contains(form)) throw err;
+    msg.className = 'msg err';
+    msg.textContent = err.name === 'OperationError' ? 'Wrong password.' : 'Could not open the presentation.';
+    button.disabled = false;
+    form.password.select();
+  }
+});
+
+// stay unlocked across reloads within this browser tab
+let saved = null;
+try { saved = sessionStorage.getItem('k'); } catch {}
+if (saved) attempt(Uint8Array.from(saved.match(/../g), (h) => parseInt(h, 16)), false).catch(() => {
+  try { sessionStorage.removeItem('k'); } catch {}
+});
+</script>
+</body>
+</html>
