@@ -30,7 +30,8 @@ TYPES = {".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".j
 
 
 def main():
-    password = os.environ.get("SITE_PASSWORD") or getpass.getpass("Password: ")
+    # the password is case-insensitive: the lock screen lowercases input the same way
+    password = (os.environ.get("SITE_PASSWORD") or getpass.getpass("Password: ")).lower()
     # reuse the previous build's salt so unchanged files encrypt to identical bytes (no repo bloat on rebuilds)
     lock = OUT / "index.html"
     found = re.search(r'data-salt="([0-9a-f]{32})"', lock.read_text(encoding="utf-8")) if lock.exists() else None
